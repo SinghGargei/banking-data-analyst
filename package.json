@@ -1,0 +1,38 @@
+{
+  "name": "banking-data-analyst-backend",
+  "version": "1.0.0",
+  "description": "Foundational backend for Banking Conversational Data Analyst with Node.js, Express, TypeScript, and SQLite",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "seed": "tsx src/db/seed.ts",
+    "db:init": "tsx -e \"import { initializeDatabase } from './src/db/schema'; initializeDatabase().then(() => console.log('Database initialized.'));\""
+  },
+  "keywords": [
+    "banking",
+    "conversational-ai",
+    "data-analyst",
+    "express",
+    "typescript",
+    "sqlite3"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "^2.29.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.4",
+    "@types/sqlite3": "^3.1.11",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

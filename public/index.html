@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Banking Conversational Data Analyst</title>
+  <meta name="description" content="AI-powered banking conversational data analyst with SQL translation, interactive charts, and real-time analytics" />
+
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              100: '#d1fae5',
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857',
+            },
+            bank: {
+              dark: '#0B0F19',
+              card: '#111827',
+              border: '#1F2937',
+              subtle: '#374151',
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- ApexCharts CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+
+  <!-- React 18, ReactDOM, and Babel CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0B0F19;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1F2937;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #374151;
+    }
+    .glass-nav {
+      background: rgba(11, 15, 25, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .glass-card {
+      background: rgba(17, 24, 39, 0.90);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(55, 65, 81, 0.55);
+    }
+    /* ApexCharts tooltip overrides for Dark Theme */
+    .apexcharts-tooltip.apexcharts-theme-dark {
+      background: #0F172A !important;
+      border: 1px solid #334155 !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5) !important;
+      color: #F8FAFC !important;
+    }
+    .apexcharts-tooltip-title {
+      background: #1E293B !important;
+      border-bottom: 1px solid #334155 !important;
+      font-family: Inter, sans-serif !important;
+      font-weight: 600 !important;
+    }
+    .apexcharts-toolbar {
+      z-index: 10 !important;
+    }
+  </style>
+</head>
+<body class="bg-[#0B0F19] text-slate-100 font-sans antialiased min-h-screen flex flex-col selection:bg-emerald-500 selection:text-white">
+  <div id="root" class="flex-1 flex flex-col"></div>
+
+  <!-- React Application with DataRenderer and ApexCharts Integration -->
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // Quick Starter Questions
+    const SUGGESTED_QUERIES = [
+      "What is the breakdown of applications by segment?",
+      "Which branches have the highest rejection rates?",
+      "Who are our top 5 customers by transaction value?",
+      "Show monthly application trends for Retail banking",
+      "What is the average credit rejection rate across branches?",
+      "Summarize customer portfolios with volume over $1,000,000"
+    ];
+
+    // ========================================================================
+    // Utility Helpers: Data Formatting & Classification
+    // ========================================================================
+
+    function formatNumberValue(val, keyName = '') {
+      if (typeof val !== 'number') return String(val ?? '');
+      const lower = keyName.toLowerCase();
+      if (lower.includes('rate') || lower.includes('rejection') || (val >= 0 && val <= 1 && lower.includes('pct'))) {
+        return (val * 100).toFixed(2) + '%';
+      }
+      if (lower.includes('value') || lower.includes('volume') || lower.includes('portfolio') || lower.includes('amount')) {
+        return val.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+      }
+      return val.toLocaleString('en-US');
+    }
+
+    function formatHeaderName(header) {
+      return header
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    function detectSmartView(data, formatHint) {
+      if (!data || data.length === 0) return 'table';
+      if (data.length === 1) return 'kpi';
+
+      const sample = data[0];
+      const keys = Object.keys(sample);
+
+      // Check if time-series column exists
+      const hasDateColumn = keys.some(k => {
+        const lower = k.toLowerCase();
+        return lower.includes('month') || lower.includes('date') || lower.includes('year') || lower.includes('period');
+      });
+
+      if (hasDateColumn) {
+        return 'line';
+      }
+
+      // Check if categorical comparison exists
+      const hasCategory = keys.some(k => typeof sample[k] === 'string');
+      const hasMetric = keys.some(k => typeof sample[k] === 'number');
+
+      if (hasCategory && hasMetric && data.length <= 30) {
+        return 'bar';
+      }
+
+      return 'table';
+    }
+
+    // ========================================================================
+    // ApexCharts Component (Memory Leak & Collision Proof)
+    // ========================================================================
+
+    function ApexChartComponent({ data, chartType, chartId }) {
+      const chartContainerRef = useRef(null);
+      const chartInstanceRef = useRef(null);
+
+      useEffect(() => {
+        if (!chartContainerRef.current || !data || data.length === 0) return;
+
+        // Clean up any existing chart instance in this container
+        if (chartInstanceRef.current) {
+          chartInstanceRef.current.destroy();
+          chartInstanceRef.current = null;
+        }
+
+        const sample = data[0];
+        const keys = Object.keys(sample);
+
+        // Detect category key (first string column or first column)
+        const categoryKey = keys.find(k => typeof sample[k] === 'string' && k !== 'created_at') || keys[0];
+
+        // Detect numeric value keys (all number columns)
+        let numericKeys = keys.filter(k => typeof sample[k] === 'number' && k !== 'id');
+        if (numericKeys.length === 0) {
+          // If no explicit number, try parsing numbers
+          numericKeys = keys.filter(k => k !== categoryKey && !isNaN(Number(sample[k])));
+        }
+
+        // Default to first numeric key if none detected
+        const primaryMetricKey = numericKeys[0] || keys[1] || keys[0];
+
+        const categories = data.map(item => String(item[categoryKey] ?? ''));
+        const isRate = primaryMetricKey.toLowerCase().includes('rate') || primaryMetricKey.toLowerCase().includes('rejection');
+        const isCurrency = primaryMetricKey.toLowerCase().includes('value') || primaryMetricKey.toLowerCase().includes('volume');
+
+        // Build series data
+        const series = numericKeys.length > 1 && numericKeys.length <= 3
+          ? numericKeys.map(key => ({
+              name: formatHeaderName(key),
+              data: data.map(item => {
+                const val = Number(item[key]);
+                return isRate ? Number((val * 100).toFixed(2)) : val;
+              })
+            }))
+          : [{
+              name: formatHeaderName(primaryMetricKey),
+              data: data.map(item => {
+                const val = Number(item[primaryMetricKey]);
+                return isRate ? Number((val * 100).toFixed(2)) : val;
+              })
+            }];
+
+        const options = {
+          series,
+          chart: {
+            id: chartId || `chart-${Date.now()}`,
+            type: chartType === 'line' ? 'area' : 'bar',
+            height: 320,
+            background: 'transparent',
+            toolbar: {
+              show: true,
+              tools: {
+                download: true,
+                selection: false,
+                zoom: false,
+                zoomin: false,
+                zoomout: false,
+                pan: false,
+                reset: false
+              }
+            },
+            animations: {
+              enabled: true,
+              easing: 'easeinout',
+              speed: 500,
+            }
+          },
+          colors: ['#10B981', '#06B6D4', '#6366F1', '#F59E0B'],
+          theme: {
+            mode: 'dark'
+          },
+          dataLabels: {
+            enabled: false
+          },
+          stroke: {
+            curve: 'smooth',
+            width: chartType === 'line' ? 3 : 0
+          },
+          fill: {
+            type: 'gradient',
+            gradient: {
+              shade: 'dark',
+              type: 'vertical',
+              shadeIntensity: 0.5,
+              gradientToColors: ['#059669', '#0891B2'],
+              inverseColors: false,
+              opacityFrom: chartType === 'line' ? 0.45 : 0.90,
+              opacityTo: chartType === 'line' ? 0.05 : 0.65,
+              stops: [0, 95, 100]
+            }
+          },
+          grid: {
+            borderColor: '#1E293B',
+            strokeDashArray: 4,
+            yaxis: {
+              lines: { show: true }
+            },
+            xaxis: {
+              lines: { show: false }
+            }
+          },
+          xaxis: {
+            categories,
+            labels: {
+              style: {
+                colors: '#94A3B8',
+                fontSize: '11px',
+                fontFamily: 'Inter, sans-serif'
+              },
+              rotate: categories.length > 8 ? -45 : 0,
+              trim: true,
+              maxHeight: 60
+            },
+            axisBorder: { color: '#334155' },
+            axisTicks: { color: '#334155' }
+          },
+          yaxis: {
+            labels: {
+              style: {
+                colors: '#94A3B8',
+                fontSize: '11px',
+                fontFamily: 'Inter, sans-serif'
+              },
+              formatter: (val) => {
+                if (isRate) return `${val}%`;
+                if (isCurrency) {
+                  if (val >= 1000000) return `$${(val / 1000000).toFixed(1)}M`;
+                  if (val >= 1000) return `$${(val / 1000).toFixed(0)}k`;
+                  return `$${val}`;
+                }
+                if (val >= 1000) return `${(val / 1000).toFixed(1)}k`;
+                return val;
+              }
+            }
+          },
+          tooltip: {
+            theme: 'dark',
+            y: {
+              formatter: (val) => {
+                if (isRate) return `${val.toFixed(2)}%`;
+                if (isCurrency) return val.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+                return val.toLocaleString();
+              }
+            }
+          },
+          legend: {
+            position: 'top',
+            horizontalAlign: 'right',
+            labels: { colors: '#94A3B8' }
+          }
+        };
+
+        try {
+          chartInstanceRef.current = new window.ApexCharts(chartContainerRef.current, options);
+          chartInstanceRef.current.render();
+        } catch (err) {
+          console.error('[ApexCharts Render Error]', err);
+        }
+
+        // Cleanup on unmount or on dependency update
+        return () => {
+          if (chartInstanceRef.current) {
+            chartInstanceRef.current.destroy();
+            chartInstanceRef.current = null;
+          }
+        };
+      }, [data, chartType, chartId]);
+
+      return (
+        <div class="relative w-full rounded-xl p-3 bg-slate-950/80 border border-slate-800 shadow-inner">
+          <div ref={chartContainerRef} class="w-full"></div>
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // KPI Cards Component (for single rows or summary metrics)
+    // ========================================================================
+
+    function KpiCardsComponent({ data }) {
+      if (!data || data.length === 0) return null;
+
+      // Single-row KPI layout
+      if (data.length === 1) {
+        const row = data[0];
+        const entries = Object.entries(row).filter(([k]) => k !== 'id' && k !== 'created_at');
+
+        return (
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 mt-2">
+            {entries.map(([key, val], idx) => {
+              const formatted = formatNumberValue(val, key);
+              const isRate = key.toLowerCase().includes('rate');
+              const isMoney = key.toLowerCase().includes('value') || key.toLowerCase().includes('volume');
+
+              return (
+                <div
+                  key={idx}
+                  class="bg-gradient-to-br from-slate-900 via-slate-900/90 to-slate-950 p-4 rounded-xl border border-slate-800 hover:border-emerald-500/40 transition shadow-lg group relative overflow-hidden"
+                >
+                  <div class="absolute -right-4 -bottom-4 w-16 h-16 bg-emerald-500/5 rounded-full blur-xl group-hover:bg-emerald-500/10 transition"></div>
+                  <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                    {formatHeaderName(key)}
+                  </div>
+                  <div class="text-xl sm:text-2xl font-bold text-white tracking-tight font-mono">
+                    {formatted}
+                  </div>
+                  <div class="mt-2 flex items-center space-x-1.5 text-[11px] text-emerald-400 font-medium">
+                    <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                    <span>{isRate ? 'Operational Ratio' : isMoney ? 'Financial Metric' : 'Cumulative Volume'}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      }
+
+      // Multi-row Top Metrics Cards
+      const sample = data[0];
+      const keys = Object.keys(sample);
+      const nameKey = keys.find(k => typeof sample[k] === 'string') || keys[0];
+      const valueKey = keys.find(k => typeof sample[k] === 'number') || keys[1];
+
+      return (
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5 mt-2">
+          {data.slice(0, 6).map((row, idx) => (
+            <div
+              key={idx}
+              class="bg-gradient-to-br from-slate-900 via-slate-900/80 to-slate-950 p-4 rounded-xl border border-slate-800 hover:border-emerald-500/40 transition shadow-md"
+            >
+              <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+                <span class="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                  #{idx + 1}
+                </span>
+                <span class="text-[11px] text-slate-500">{formatHeaderName(valueKey)}</span>
+              </div>
+              <div class="text-sm font-semibold text-slate-200 truncate mt-1">
+                {String(row[nameKey] ?? '')}
+              </div>
+              <div class="text-lg font-bold text-white font-mono mt-1">
+                {formatNumberValue(row[valueKey], valueKey)}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // Table View Component (Responsive Tailwind Overflow)
+    // ========================================================================
+
+    function TableViewComponent({ data, format }) {
+      const [filterText, setFilterText] = useState("");
+
+      if (!data || data.length === 0) {
+        return (
+          <div class="p-6 text-center text-xs text-slate-400 bg-slate-950/60 rounded-xl border border-slate-800">
+            No tabular data returned for this query.
+          </div>
+        );
+      }
+
+      const headers = Object.keys(data[0]);
+
+      const filteredData = filterText.trim() === ""
+        ? data
+        : data.filter(row =>
+            Object.values(row).some(v =>
+              String(v).toLowerCase().includes(filterText.toLowerCase())
+            )
+          );
+
+      return (
+        <div class="mt-3 rounded-xl border border-slate-800 overflow-hidden bg-slate-950/90 shadow-xl">
+          {/* Table Filter Toolbar */}
+          {data.length > 5 && (
+            <div class="px-4 py-2.5 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div class="text-xs text-slate-400 flex items-center space-x-1.5">
+                <svg class="w-3.5 h-3.5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                </svg>
+                <span>Filter Records:</span>
+              </div>
+              <input
+                type="text"
+                value={filterText}
+                onChange={e => setFilterText(e.target.value)}
+                placeholder="Search table values..."
+                class="bg-slate-950 text-slate-200 text-xs px-2.5 py-1 rounded-lg border border-slate-700/80 focus:outline-none focus:border-emerald-500 w-48 transition"
+              />
+            </div>
+          )}
+
+          {/* Responsive Overflow Wrapper */}
+          <div class="overflow-x-auto max-h-80">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead class="bg-slate-900 text-slate-300 uppercase tracking-wider sticky top-0 z-10 border-b border-slate-800 shadow-sm">
+                <tr>
+                  {headers.map(header => (
+                    <th key={header} class="px-4 py-3 font-semibold text-slate-300 text-[11px] whitespace-nowrap">
+                      {formatHeaderName(header)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60 font-sans">
+                {filteredData.map((row, rowIdx) => (
+                  <tr
+                    key={rowIdx}
+                    class="hover:bg-slate-900/50 transition-colors group"
+                  >
+                    {headers.map((col, colIdx) => {
+                      const val = row[col];
+                      const formatted = formatNumberValue(val, col);
+                      const isNum = typeof val === 'number';
+
+                      return (
+                        <td
+                          key={colIdx}
+                          class={`px-4 py-2.5 text-slate-200 text-xs whitespace-nowrap ${isNum ? 'font-mono text-emerald-300' : ''}`}
+                        >
+                          {formatted}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Table Footer */}
+          <div class="bg-slate-900/80 px-4 py-2.5 text-[11px] text-slate-400 border-t border-slate-800 flex items-center justify-between">
+            <span class="flex items-center space-x-1.5">
+              <span>Showing</span>
+              <strong class="text-white">{filteredData.length}</strong>
+              <span>of</span>
+              <strong class="text-white">{data.length}</strong>
+              <span>records</span>
+            </span>
+            <span class="text-emerald-400 font-medium font-mono text-[10px] bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+              Format: {format || 'table'}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // Central DataRenderer Component with View-Switching Engine
+    // ========================================================================
+
+    function DataRenderer({ message, onSwitchView }) {
+      const { id, data, sql, activeView, format } = message;
+
+      if (!data && !sql) return null;
+
+      const hasData = Array.isArray(data) && data.length > 0;
+      const effectiveView = activeView === 'smart' ? detectSmartView(data, format) : activeView;
+
+      // Smart view tag hint
+      const smartBadge = activeView === 'smart' ? (
+        <span class="text-[10px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+          Auto: {effectiveView.toUpperCase()}
+        </span>
+      ) : null;
+
+      return (
+        <div class="mt-4 pt-3.5 border-t border-slate-800/80">
+          
+          {/* Interactive View Switcher Tabs & Actions Header */}
+          <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+            
+            {/* View Switching Button Group */}
+            <div class="flex flex-wrap items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800">
+              
+              {/* 1. Smart View */}
+              {hasData && (
+                <button
+                  id={`tab-smart-${id}`}
+                  onClick={() => onSwitchView(id, 'smart')}
+                  class={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 ${activeView === 'smart' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                  title="Auto-detect best format (Smart View)"
+                >
+                  <svg class="w-3.5 h-3.5 text-amber-300" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd" />
+                  </svg>
+                  <span>Smart View</span>
+                </button>
+              )}
+
+              {/* 2. KPI Cards */}
+              {hasData && (
+                <button
+                  id={`tab-kpi-${id}`}
+                  onClick={() => onSwitchView(id, 'kpi')}
+                  class={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 ${activeView === 'kpi' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                  title="KPI Cards View"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                  </svg>
+                  <span>KPI Cards</span>
+                </button>
+              )}
+
+              {/* 3. Table View */}
+              {hasData && (
+                <button
+                  id={`tab-table-${id}`}
+                  onClick={() => onSwitchView(id, 'table')}
+                  class={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 ${activeView === 'table' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                  title="Data Table View"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span>Table View</span>
+                </button>
+              )}
+
+              {/* 4. Bar Chart */}
+              {hasData && (
+                <button
+                  id={`tab-bar-${id}`}
+                  onClick={() => onSwitchView(id, 'bar')}
+                  class={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 ${activeView === 'bar' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                  title="ApexCharts Bar Chart"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  <span>Bar Chart</span>
+                </button>
+              )}
+
+              {/* 5. Line Chart */}
+              {hasData && (
+                <button
+                  id={`tab-line-${id}`}
+                  onClick={() => onSwitchView(id, 'line')}
+                  class={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 ${activeView === 'line' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                  title="ApexCharts Line / Area Chart"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+                  </svg>
+                  <span>Line Chart</span>
+                </button>
+              )}
+
+              {/* 6. SQL Query */}
+              {sql && (
+                <button
+                  id={`tab-sql-${id}`}
+                  onClick={() => onSwitchView(id, 'sql')}
+                  class={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 ${activeView === 'sql' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                  title="SQL Query Statement"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                  </svg>
+                  <span>SQL</span>
+                </button>
+              )}
+
+              {/* 7. Raw JSON */}
+              {hasData && (
+                <button
+                  id={`tab-json-${id}`}
+                  onClick={() => onSwitchView(id, 'json')}
+                  class={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 ${activeView === 'json' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                  title="Raw JSON Payload"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" />
+                  </svg>
+                  <span>JSON</span>
+                </button>
+              )}
+            </div>
+
+            {/* Smart View Indicator Tag */}
+            {smartBadge}
+          </div>
+
+          {/* Render Active View Container */}
+          <div class="mt-2 transition-all duration-200">
+            {effectiveView === 'kpi' && (
+              <KpiCardsComponent data={data} />
+            )}
+
+            {effectiveView === 'table' && (
+              <TableViewComponent data={data} format={format} />
+            )}
+
+            {effectiveView === 'bar' && (
+              <ApexChartComponent data={data} chartType="bar" chartId={`bar-${id}`} />
+            )}
+
+            {effectiveView === 'line' && (
+              <ApexChartComponent data={data} chartType="line" chartId={`line-${id}`} />
+            )}
+
+            {activeView === 'sql' && sql && (
+              <div class="rounded-xl border border-slate-800 bg-[#070A10] p-4 font-mono text-xs text-emerald-300 overflow-x-auto leading-relaxed shadow-inner">
+                <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-2 font-sans font-semibold flex items-center justify-between">
+                  <span>Executed SQLite Statement (Validated Read-Only)</span>
+                  <span class="text-emerald-400 font-mono">SQLite 3</span>
+                </div>
+                <pre class="whitespace-pre-wrap">{sql}</pre>
+              </div>
+            )}
+
+            {activeView === 'json' && data && (
+              <div class="rounded-xl border border-slate-800 bg-[#070A10] p-4 font-mono text-xs text-cyan-300 overflow-x-auto max-h-80 shadow-inner">
+                <pre class="whitespace-pre-wrap">{JSON.stringify(data, null, 2)}</pre>
+              </div>
+            )}
+          </div>
+
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // Main Application Component
+    // ========================================================================
+
+    function App() {
+      const [messages, setMessages] = useState([
+        {
+          id: 'welcome-msg',
+          sender: 'assistant',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          answerText: "Welcome to the Banking Conversational Data Analyst. I can query our banking datasets in real time using natural language. Ask a question about loan applications, branch rejection rates, or customer portfolio values.",
+          data: [],
+          sql: "",
+          format: "text",
+          activeView: "table"
+        }
+      ]);
+      const [inputQuery, setInputQuery] = useState("");
+      const [isLoading, setIsLoading] = useState(false);
+      const [dbStatus, setDbStatus] = useState({ isHealthy: true, message: "Connected to banking.db" });
+      const [copyAlert, setCopyAlert] = useState(null);
+      const messagesEndRef = useRef(null);
+      const inputRef = useRef(null);
+
+      // Auto-scroll on new messages
+      useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, [messages, isLoading]);
+
+      // Check DB health on startup
+      useEffect(() => {
+        fetch('/health')
+          .then(r => r.json())
+          .then(d => {
+            if (d.database?.isHealthy) {
+              setDbStatus({ isHealthy: true, message: "Connected to banking.db" });
+            } else {
+              setDbStatus({ isHealthy: false, message: "Database connection degraded" });
+            }
+          })
+          .catch(() => setDbStatus({ isHealthy: false, message: "Server offline" }));
+      }, []);
+
+      const showNotification = (msg) => {
+        setCopyAlert(msg);
+        setTimeout(() => setCopyAlert(null), 2500);
+      };
+
+      const copyToClipboard = (text, label) => {
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(() => {
+          showNotification(`${label} copied to clipboard!`);
+        });
+      };
+
+      const copyTableAsCsv = (data) => {
+        if (!data || data.length === 0) return;
+        const headers = Object.keys(data[0]);
+        const csvRows = [
+          headers.join(','),
+          ...data.map(row => headers.map(h => JSON.stringify(row[h] ?? '')).join(','))
+        ];
+        copyToClipboard(csvRows.join('\n'), 'Data Table (CSV)');
+      };
+
+      const handleSwitchView = (messageId, newView) => {
+        setMessages(prev => prev.map(m => m.id === messageId ? { ...m, activeView: newView } : m));
+      };
+
+      const handleSendMessage = async (queryText) => {
+        const text = (queryText || inputQuery).trim();
+        if (!text || isLoading) return;
+
+        const userMsg = {
+          id: 'user-' + Date.now(),
+          sender: 'user',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          answerText: text
+        };
+
+        setMessages(prev => [...prev, userMsg]);
+        setInputQuery("");
+        setIsLoading(true);
+
+        try {
+          const response = await fetch('/api/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: text })
+          });
+
+          const json = await response.json();
+
+          if (!response.ok && json.error) {
+            setMessages(prev => [
+              ...prev,
+              {
+                id: 'asst-' + Date.now(),
+                sender: 'assistant',
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                answerText: `⚠️ Guardrail Notice: ${json.error}`,
+                data: [],
+                sql: json.sql || "",
+                format: "text",
+                isError: true,
+                activeView: "table"
+              }
+            ]);
+          } else {
+            setMessages(prev => [
+              ...prev,
+              {
+                id: 'asst-' + Date.now(),
+                sender: 'assistant',
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                answerText: json.answerText || "Query executed successfully.",
+                data: Array.isArray(json.data) ? json.data : [],
+                sql: json.sql || "",
+                format: json.format || "table",
+                activeView: 'smart' // Default to Smart View for automatic best layout!
+              }
+            ]);
+          }
+        } catch (err) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: 'asst-' + Date.now(),
+              sender: 'assistant',
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              answerText: `Network Connection Error: ${err.message}`,
+              data: [],
+              sql: "",
+              format: "text",
+              isError: true,
+              activeView: "table"
+            }
+          ]);
+        } finally {
+          setIsLoading(false);
+          setTimeout(() => inputRef.current?.focus(), 100);
+        }
+      };
+
+      const clearChat = () => {
+        setMessages([
+          {
+            id: 'welcome-msg',
+            sender: 'assistant',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            answerText: "Chat history cleared. How can I assist with banking data analysis?",
+            data: [],
+            sql: "",
+            format: "text",
+            activeView: "table"
+          }
+        ]);
+      };
+
+      return (
+        <div class="flex-1 flex flex-col h-screen overflow-hidden bg-[#0B0F19]">
+          
+          {/* Top Header */}
+          <header class="glass-nav border-b border-slate-800/80 px-6 py-3.5 flex items-center justify-between z-20">
+            <div class="flex items-center space-x-3.5">
+              <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 via-teal-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div>
+                <div class="flex items-center space-x-2">
+                  <h1 class="text-base font-semibold text-white tracking-tight">Banking Conversational Data Analyst</h1>
+                  <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                    gemini-2.5-flash
+                  </span>
+                  <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-medium hidden sm:inline-block">
+                    ApexCharts
+                  </span>
+                </div>
+                <div class="flex items-center space-x-2 text-xs text-slate-400">
+                  <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>{dbStatus.message}</span>
+                  <span class="text-slate-600">•</span>
+                  <span>Applications • Branches • Customers</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+              <button
+                id="clear-chat-btn"
+                onClick={clearChat}
+                class="px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 rounded-lg border border-slate-700/60 transition flex items-center space-x-1.5"
+                title="Clear current conversational thread"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span>Clear History</span>
+              </button>
+            </div>
+          </header>
+
+          {/* Toast Notification */}
+          {copyAlert && (
+            <div class="fixed top-16 right-6 z-50 bg-emerald-600/95 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl backdrop-blur-md border border-emerald-400/40 flex items-center space-x-2 animate-bounce">
+              <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
+              <span class="font-medium">{copyAlert}</span>
+            </div>
+          )}
+
+          {/* Main Chat Stream */}
+          <main class="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-6">
+            <div class="max-w-5xl mx-auto space-y-6">
+              
+              {messages.map((msg) => (
+                <div key={msg.id} class={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
+                  
+                  {/* Sender Metadata */}
+                  <div class="flex items-center space-x-2 text-xs text-slate-400 mb-1.5 px-1">
+                    {msg.sender === 'assistant' ? (
+                      <>
+                        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                        <span class="font-medium text-emerald-400">Banking Analyst</span>
+                        <span class="text-slate-600">•</span>
+                        <span>{msg.timestamp}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{msg.timestamp}</span>
+                        <span class="text-slate-600">•</span>
+                        <span class="font-medium text-slate-300">You</span>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Message Bubble / Card */}
+                  {msg.sender === 'user' ? (
+                    <div class="bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-md max-w-xl text-sm leading-relaxed">
+                      {msg.answerText}
+                    </div>
+                  ) : (
+                    <div class={`glass-card rounded-2xl rounded-tl-sm p-5 shadow-xl max-w-4xl w-full border ${msg.isError ? 'border-red-500/40 bg-red-950/20' : 'border-slate-800'}`}>
+                      
+                      {/* Top Action Row: Copy SQL & Table CSV */}
+                      <div class="flex items-start justify-between gap-4 mb-3">
+                        <div class="text-slate-200 text-sm md:text-base leading-relaxed flex-1">
+                          {msg.answerText}
+                        </div>
+                        
+                        {(msg.sql || (msg.data && msg.data.length > 0)) && (
+                          <div class="flex items-center space-x-1.5 shrink-0">
+                            {msg.sql && (
+                              <button
+                                id={`copy-sql-${msg.id}`}
+                                onClick={() => copyToClipboard(msg.sql, 'SQL Query')}
+                                class="px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white rounded-lg text-xs font-medium border border-slate-700/60 transition flex items-center space-x-1"
+                                title="Copy generated SQL statement"
+                              >
+                                <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                </svg>
+                                <span>Copy SQL</span>
+                              </button>
+                            )}
+
+                            {msg.data && msg.data.length > 0 && (
+                              <button
+                                id={`copy-table-${msg.id}`}
+                                onClick={() => copyTableAsCsv(msg.data)}
+                                class="px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white rounded-lg text-xs font-medium border border-slate-700/60 transition flex items-center space-x-1"
+                                title="Copy table as CSV format"
+                              >
+                                <svg class="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                                <span>Copy CSV</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Advanced DataRenderer Component with On-The-Fly View Switching */}
+                      <DataRenderer
+                        message={msg}
+                        onSwitchView={handleSwitchView}
+                      />
+
+                    </div>
+                  )}
+
+                </div>
+              ))}
+
+              {/* Loading Indicator */}
+              {isLoading && (
+                <div class="flex items-start space-x-3">
+                  <div class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping mt-1"></div>
+                  <div class="glass-card px-5 py-3 rounded-2xl rounded-tl-sm text-sm text-slate-300 flex items-center space-x-3 border border-slate-800">
+                    <svg class="w-4 h-4 text-emerald-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>Consulting Gemini & translating query...</span>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+          </main>
+
+          {/* Quick Query Suggestions Bar */}
+          <div class="px-6 py-2.5 bg-[#0B0F19]/90 border-t border-slate-800/60 overflow-x-auto">
+            <div class="max-w-5xl mx-auto flex items-center space-x-2">
+              <span class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold whitespace-nowrap">
+                Suggestions:
+              </span>
+              <div class="flex items-center space-x-2 overflow-x-auto py-1">
+                {SUGGESTED_QUERIES.map((sq, idx) => (
+                  <button
+                    key={idx}
+                    id={`suggested-query-${idx}`}
+                    onClick={() => handleSendMessage(sq)}
+                    class="text-xs bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 px-3 py-1.5 rounded-lg border border-slate-800 hover:border-emerald-500/30 whitespace-nowrap transition"
+                  >
+                    {sq}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Chat Input Form */}
+          <footer class="glass-nav border-t border-slate-800 px-6 py-4">
+            <form
+              id="query-form"
+              onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}
+              class="max-w-5xl mx-auto flex items-center space-x-3"
+            >
+              <div class="flex-1 relative">
+                <input
+                  ref={inputRef}
+                  id="query-input"
+                  type="text"
+                  value={inputQuery}
+                  onChange={(e) => setInputQuery(e.target.value)}
+                  placeholder="Ask a banking question (e.g., 'Which branches have highest rejection rate?')..."
+                  class="w-full bg-slate-900/90 text-slate-100 placeholder-slate-500 text-sm rounded-xl px-4 py-3 border border-slate-700/70 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition shadow-inner font-sans"
+                  disabled={isLoading}
+                />
+              </div>
+
+              <button
+                id="submit-query-btn"
+                type="submit"
+                disabled={isLoading || !inputQuery.trim()}
+                class={`px-5 py-3 rounded-xl font-medium text-sm flex items-center space-x-2 transition shadow-lg ${isLoading || !inputQuery.trim() ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/40' : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-500/20 active:scale-95'}`}
+              >
+                <span>Ask</span>
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                </svg>
+              </button>
+            </form>
+          </footer>
+
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

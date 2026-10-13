@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.env
+banking.db
+banking.db-journal
+banking.db-wal
+banking.db-shm
+.DS_Store
+Thumbs.db
