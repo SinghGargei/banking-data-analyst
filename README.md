@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Banking Conversational Data Analyst Backend
 
 Foundational backend architecture for a **Banking Conversational Data Analyst** built with **Node.js**, **Express**, **TypeScript**, and **SQLite**.
@@ -134,3 +135,7 @@ npm start
 | `GET` | `/api/analyst/schema` | Complete schema metadata, columns, types, and sample data for LLM grounding |
 | `GET` | `/api/analyst/overview` | Multi-dataset executive summary for instant conversational answers |
 | `POST` | `/api/analyst/query` | Validated read-only SQL query runner (rejects non-`SELECT` statements) |
+=======
+# banking-data-analyst
+Banking Conversational Data Analyst: A foundational backend application built using Node.js, Express, and SQLite designed for banking domain requirements to handle conversational data interactions.
+>>>>>>> 890c99ce7a9b9e9c7cc668d7720220bda35ffcb9
