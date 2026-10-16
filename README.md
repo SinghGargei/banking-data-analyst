@@ -1,7 +1,7 @@
 <<<<<<< HEAD
-# Banking Conversational Data Analyst Backend
+# Banking Conversational Data Analyst
 
-Foundational backend architecture for a **Banking Conversational Data Analyst** built with **Node.js**, **Express**, **TypeScript**, and **SQLite**..
+Foundational backend architecture for a **Banking Conversational Data Analyst** built with **Node.js**, **Express**, **TypeScript**, and **SQLite**.
 
 ---
 
